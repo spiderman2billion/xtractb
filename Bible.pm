@@ -5,7 +5,7 @@ package Bible;
 $swap_dir = $ENV{'BIBLE_SWAP_DIR'};
 $swap_dir ||= "/tmp";
 $root_dir = $ENV{'BIBLE_LIB_DIR'};
-$root_dir ||= "";
+$root_dir ||= ".";
 ##
 #########################################################
 use strict;
