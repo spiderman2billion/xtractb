@@ -1,7 +1,8 @@
 # xtractb
 ##Installation
-*  in Bible.pm change $rootdir to the location of the files 
 *  get translations.db file
+*  install all dependent libraries using cpan
+*  brew install sql-lite
 
 ##Usage:
 ```
