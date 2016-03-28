@@ -17,27 +17,15 @@ xtractb --- extracts verse from the bible.. output in 'database' format
       (or) -b <book> -c <chapter> -v <verse-verse>
       (or) -range <range: nt,ot,entire>
           [-t <translation: niv,nasb,kjv,esv>]
+          [-end (put reference at end)]
 
 -------
 formatb  --- formats output to desired media (ie. text or tex)
 
    Usage:
-      formatb [-o <output format: txt,tex default: txt>] < input_file
-            [-g(reek input (tex mode only))]
-            [-i(gnore printing the tex macro information (tex mode only))]
-            [-p(oetry)] [-n(o numbers for chapter and verses)]
-            [-k( highlight in color)]
-
-   Notes:
-      -i: does not print the macro information for creating a tex file
-          this is useful if combining several files into one
-          so you don't have to delete all the tex information
-      -p: poetry is used with the tex option to make Psalms look 
-          normal (not like prose... each line centered)
-      -n: no numbers for chapter and verses doesn't print the numbers for 
-          the chapter and verse
-      -k: colorizes words on terminals that support the escape
-          characters (ansi?)
+     --tab <0,1> (true/false)
+     --wrap <0,1> (true/false)
+     --nonumbers (no numbers for chapter and verses (default: on))
 
 ######################################################################
 Examples of Possible Usage:
