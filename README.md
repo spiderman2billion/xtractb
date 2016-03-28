@@ -4,8 +4,8 @@ To install:
 * create off of $rootdir a lib/ directory
  *     and add translations.db to directory lib/
 
-Usage:
-
+##Usage:
+```
 xtractb --- extracts verse from the bible.. output in 'database' format
 
    Usage:
@@ -46,3 +46,4 @@ Examples of Possible Usage:
         outputs a reasonable text format to STDOUT
 --) xtractb -t es -b "1 Peter" -c 5 -v 1-11 |formatb 
       extracts 1 Peter 5:1-11 
+```
