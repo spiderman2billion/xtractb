@@ -1,0 +1,400 @@
+#!/usr/bin/perl -w
+##############################################################################
+use FindBin;
+use lib $FindBin::Bin;
+##
+#########################################################
+use strict;
+use DBI;
+use Bible;
+
+                                        #globals, program info
+use vars qw($myname $ver $id_line);
+($myname = $0) =~ s!(.*)/!!;
+($ver = '$Revision: 1.3 $') =~ s!.*: (\d+\.\d+).*!$1!;
+$id_line      = '';
+$|=1;                                   #flush buffers immediately
+
+my ($kill, $book, $chapter, $verse, $range, $translation, $start, 
+   $stop);
+my ($dout, $output);
+my $oldbook = "asdf";
+my $oldchapter = 999;
+my $oldverse = 999; 
+parse_args();
+Handle_Int();
+
+my $out=*STDOUT;
+if ($output) {
+  open $out,">$output"
+    or die "unable to open $output:$!\n";
+  *STDERR = $out;
+}
+
+my $bibleDb = "$root_dir/translations.db";
+### connect to database
+my $dbh = DBI->connect("DBI:SQLite:dbname=$bibleDb",{'RaiseError' =>1})
+   or die $DBI::errstr;
+
+### Search file for desired verses
+print STDERR "Searching....\n" if $debug; 
+
+my ($offset, $key);
+
+if (! $start) {
+  if ($book !~ /\-/) {
+    if (translatebook($book)) { 
+       print STDERR "Unable to find: $book";
+       exit; 
+    };
+  }
+}
+
+my $ref = '';
+if (($start) && ($stop)) {
+    my ($startbook,$startchapter,$startverse) = num2bible($start);
+    my ($stopbook,$stopchapter,$stopverse) = num2bible($stop);
+    if ($startbook == $stopbook) {
+      $startbook = $num2book{$startbook};
+      $ref = "{$startbook,$startchapter,$startverse," .
+          "$stopchapter,$stopverse}\n" ;
+      print $out "\\nv$ref" if ($dout =~ /^normal$/);
+    }
+} elsif ((!$chapter && !$verse) && ($book !~ /-/)) {
+    if (exists $book2num{$book})
+    {
+       $start = bible2num($book2num{$book},1,1);
+       ## find end chapter and verse
+       my $cmd = "SELECT COUNT(*) from Bible ".
+                 "where (BOOKNUM=$book2num{$book} and TRANSLATION='$translation'".
+                 " and VERSE=1) group by BOOKNUM";
+       my $stopchpt = dbLookup($cmd,0);
+       $cmd = "SELECT COUNT(*) from Bible ". 
+                 "where (TRANSLATION='$translation' and BOOKNUM=$book2num{$book}". 
+                 " and CHAPTER=$stopchpt) ".
+                 "group by BOOKNUM";
+       my $stopverse = dbLookup($cmd,0);
+
+       $stop = bible2num($book2num{$book},$stopchpt,$stopverse);
+
+       $ref = "{$book,1,1,$stopchpt,$stopverse}\n" ;
+       print $out "\\nv$ref" if ($dout =~ /^normal$/);
+    } else { print STDERR "Unknown book: $book\n"; exit; }
+} elsif ($book =~ /(.+)-(.+)/) {
+    my ($startbook, $stopbook, $newbook,$tmpstart);
+    $startbook = $1;
+    $stopbook  = $2;
+    $startbook =~ tr/A-Z/a-z/;
+    $stopbook  =~ tr/A-Z/a-z/;
+    $newbook = $abbrev2name{$startbook};
+    if (!$newbook) { print STDERR "Unknown book: $startbook...\n"; exit; }
+    else { $startbook = $newbook; }
+    $newbook = $abbrev2name{$stopbook};
+    if (!$newbook) { print STDERR "Unknown book: $stopbook...\n"; exit; }
+    else { $stopbook = $newbook; }
+
+    
+    if (exists $book2num{$startbook}) {
+       $start = bible2num($book2num{$startbook},1,1);
+    } else { print STDERR "Unknown book: $startbook\n"; exit; }
+
+    if (exists $book2num{$stopbook}) {
+       ## find end chapter and verse
+       my $cmd = "SELECT COUNT(*) from Bible " .
+                 "where (TRANSLATION='$translation' and BOOKNUM=$book2num{$stopbook}". 
+                 " and VERSE=1) group by BOOKNUM";
+       my $stopchpt = dbLookup($cmd,0);
+       $cmd = "SELECT COUNT(*) from Bible ". 
+                 "where (TRANSLATION='$translation' and BOOKNUM=$book2num{$stopbook}". 
+                 " and CHAPTER=$stopchpt) ".
+                 "group by BOOKNUM";
+       my $stopverse = dbLookup($cmd,0);
+
+       $stop = bible2num($book2num{$stopbook},$stopchpt,$stopverse);
+    } else { print STDERR "Unknown book: $stopbook\n"; exit; }
+
+    if ($stop < $start) { 
+    print STDERR "ERROR: $stopbook comes before $startbook\n"; exit; }
+
+} elsif ($chapter =~ /(\d+)-(\d+)/) {
+    my ($startchapter, $stopchapter, $tmpstart);
+    $startchapter = $1;
+    $stopchapter  = $2;
+
+
+    ## find end chapter and verse
+    my $cmd = "SELECT COUNT(*) from Bible ". 
+                 "where (TRANSLATION='$translation' and BOOKNUM=$book2num{$book}". 
+                 " and VERSE=1) group by BOOKNUM";
+    my $endchapter = dbLookup($cmd,0);
+       $cmd = "SELECT COUNT(*) from Bible ". 
+                 "where (TRANSLATION='$translation' and BOOKNUM=$book2num{$book}". 
+              " and CHAPTER=$endchapter) ".
+              "group by BOOKNUM";
+    my $stopverse = dbLookup($cmd,0);
+
+    if ($startchapter > $endchapter) {$startchapter=$endchapter;}
+    $start = bible2num($book2num{$book},$startchapter,1); 
+
+    if ($stopchapter > $endchapter) {$stopchapter=$endchapter;}
+
+
+    $stop = bible2num($book2num{$book},$stopchapter,$stopverse); 
+    $ref = "{$book,$startchapter,1,$stopchapter,$stopverse}\n" ;
+    print $out "\\nv$ref" if ($dout =~ /^normal$/);
+
+} elsif ($verse =~ /(\d+)-(\d+)/) {
+    my ($startverse, $stopverse, $tmpstart);
+    $startverse = $1;
+    $stopverse  = $2;
+
+    $start = bible2num($book2num{$book},$chapter,$startverse); 
+    ## find end verse
+    my $cmd = "SELECT COUNT(*) from Bible ". 
+                 "where (TRANSLATION='$translation' and BOOKNUM=$book2num{$book}". 
+              " and chapter=$chapter) ".
+              "group by BOOKNUM";
+    my $endverse = dbLookup($cmd,0);
+
+    if ($startverse > $endverse) {$startverse=$endverse;}
+    $start = bible2num($book2num{$book},$chapter,$startverse); 
+    if ($stopverse > $endverse) {$stopverse=$endverse;}
+    $stop  = bible2num($book2num{$book},$chapter,$stopverse); 
+
+    $ref = "{$book,$chapter,$startverse,$chapter,$stopverse}\n" ;
+    print $out "\\nv$ref" if ($dout =~ /^normal$/);
+
+} elsif (!$verse) {
+    ## find end chapter 
+    my   $cmd = "SELECT COUNT(*) from Bible ". 
+                 "where (TRANSLATION='$translation' and BOOKNUM=$book2num{$book}". 
+              " and verse=1) group by BOOKNUM";
+    my $tmpchapter = dbLookup($cmd,0);
+    if ($chapter > $tmpchapter) {$chapter=$tmpchapter};
+
+    ## find end verse
+       $cmd = "SELECT COUNT(*) from Bible ". 
+              "where (TRANSLATION='$translation' and BOOKNUM=$book2num{$book}". 
+              " and chapter=$chapter) ".
+              "group by BOOKNUM";
+    my $stopverse = dbLookup($cmd,0);
+
+    $start = bible2num($book2num{$book},$chapter,1); 
+    $stop  = bible2num($book2num{$book},$chapter,$stopverse); 
+
+    $ref = "{$book,$chapter,1,$chapter,$stopverse}\n" ;
+    print $out "\\nv$ref" if ($dout =~ /^normal$/);
+} else {
+    $start = bible2num($book2num{$book},$chapter,$verse); 
+    $stop  = $start;
+
+    $ref = "{$book,$chapter,$verse,$chapter,$verse}\n" ;
+    print $out "\\nv$ref" if ($dout =~ /^normal$/);
+}
+
+extractit($start, $stop);
+print $out "\\pv$ref" if ($dout =~ /^end$/);
+print $out "\n" if ($dout !~ /^normal$/);
+
+
+## Remove file
+Cleanup() if ($kill);
+
+##################################
+
+sub Cleanup{
+     $dbh->disconnect();
+}
+
+###########################
+## get correct book name
+sub translatebook {
+  my $returncode = 1;
+  my $newbook;
+  $book =~ tr/A-Z/a-z/;
+  $newbook = $abbrev2name{$book};
+  if ($book =~ /^\d+$/) {
+    if (exists $num2book{$book}) {
+       $newbook = $num2book{$book};
+     }
+  }
+  if ($newbook) {
+    $book = $num2book{$book2num{$newbook}};
+    $returncode = 0;
+  }
+  return $returncode;
+}
+   
+##################################
+
+sub extractit {
+    my ($start, $stop) = @_;
+    my ($localvar,$tmpvar);
+    my $cmd = "SELECT IDX,VERSETEXT from Bible " .
+              "where (TRANSLATION='$translation' and IDX between $start and $stop) ".
+              "order by IDX";
+    my @arry = dbInterface($cmd);
+    for (my $i=0; $i<=$#arry; $i++)
+    {
+      displayVerse($arry[$i][0],$arry[$i][1]);
+    }
+}
+
+##################################
+sub dbInterface {
+   my ($cmd) = @_;
+   print "$cmd\n" if $debug;
+   my $sth = $dbh->prepare("$cmd");
+   if (!$sth) {
+     die "Error: " . $dbh->errstr . "\n";
+   }
+   if (!$sth->execute()) {
+     die "Error: " . $dbh->errstr . "\n";
+   }
+   my @tmp;
+   while (my @ref = $sth->fetchrow_array())
+   {
+     push (@tmp, [@ref]);
+   }
+   $sth->finish();
+   return @tmp;
+}
+
+sub dbLookup {
+   my ($cmd, $field) = @_;
+   my @arry = dbInterface($cmd);
+   return $arry[0][$field];
+} 
+   
+
+##################################
+sub displayVerse {
+  my ($location, $text) = @_;
+  my $mybook = $num2book{($location-$location%1000000)/1000000};
+  my $mychapter = ($location%1000000-$location%1000)/1000;
+  my $myverse =  $location%1000;
+
+  if ($dout =~ /^raw$/) {
+     print $out "$text";
+  } elsif ($dout =~ /^byverse$/) {
+     print $out "$mybook $mychapter:$myverse\n\t$text\n\n";
+  } elsif ($dout =~ /^delinated/) {
+     if (($mybook !~ $oldbook) || ($myverse != ($oldverse+1))) {
+        print $out "\n$mybook\n";
+        print $out " $mychapter:$myverse $text";
+     }  elsif ($mychapter != $oldchapter) { 
+        print $out "\n $mychapter:$myverse $text";
+     }  else {
+        print $out " $myverse $text";
+     }
+  } else {  # normal
+    print $out "\\bv{$mybook}{$mychapter}{$myverse}{$text}\n";
+  }
+  $oldverse = $myverse;
+  $oldbook = $mybook;
+  $oldchapter = $mychapter;
+}
+
+##################################
+
+##################################
+
+##################################
+
+sub parse_args {
+    use Getopt::Long;
+
+    my ($showhelp,$tmp);
+				   #set defaults
+    $translation ||="esv";
+    $kill        ||=0;
+    $debug       ||=0;
+    $chapter     ||=""; 
+    $verse       ||=""; 
+    $range       ||=""; 
+    $dout      ||="normal"; 
+    my $language = "English";
+
+    my ($raw,$byverse,$format,$normal,$end);
+
+    GetOptions("book=s"          => \$book,
+               "chapter=s"       => \$chapter,
+               "verse=s"         => \$verse,
+               "range=s"         => \$range,
+               "start=i"         => \$start,
+               "stop=i"          => \$stop,
+               "translation=s"   => \$translation,
+               "language=s"      => \$language,
+               "Hraw"            => \$raw,
+               "output=s"        => \$output,
+               "showverse"       => \$byverse,
+               "end"       => \$end,
+               "Hnormal"         => \$normal,
+               "swap_dir=s"      => \$swap_dir,
+               "kill"            => \$kill,
+               "debug"           => \$debug,
+               "help"            => \$showhelp )
+              || ($showhelp = 1);
+
+   if ($raw) { $dout = "raw"}
+   if ($byverse) { $dout = "byverse"}
+   if ($format) { $dout = "format"}
+   if ($normal) { $dout = "normal"}
+   if ($end) { $dout = "end"}
+
+   if ($language =~ /^Sp/i) {
+     $language = "Spanish";
+   } elsif ($language =~ /^Ge/i) {
+     $language = "German";
+   } else {    
+     $language = "English";
+   }
+   print "language: $language\n" if $debug;
+   initBook2num($language);
+
+   if (!$abbrev2translation{$translation}) {
+     print "Error: unknown translation: $translation\n";
+     print "     Available translations:\n";
+     my $counter=0;
+     print  "        ";
+     foreach (@translations) {
+       print  " $_";
+       $counter++;
+       if ($counter == 6) { print "\n        "; $counter = 0;}
+     }
+     die "\n";
+   }
+   $translation = $abbrev2translation{$translation};
+
+
+   if ($range) {
+      if ($range =~ /ot/) {
+        $book="ge-mal";
+      } elsif ($range =~ /nt/) {
+        $book="mat-rev";
+      } elsif ($range =~ /let/) {
+        $book="rom-rev";
+      } elsif ($range =~ /gos/) {
+        $book="mat-joh";
+      } elsif ($range =~ /wis/) {
+        $book="job-pr";
+      } elsif ($range =~ /whl/) {
+        $book="ge-rev";
+      } else {
+        print "Error: unknown range: $range\n";
+        print "   Valid ranges:\n";
+        print "       nt (new testament)\n";
+        print "       ot (old testament)\n";
+        print "       let (letters: romans-revelation)\n";
+        print "       gos (gosples: matthew-john)\n";
+        print "       wis (wisdom literature (job-proverbs)\n";
+        die "\n";
+        
+      }
+   }
+
+                                   #required arguments
+    if (!($book || $range || $start)) {
+       die "ERROR: no book or range or start number\n";
+    }
+}

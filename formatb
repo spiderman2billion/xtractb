@@ -1,0 +1,539 @@
+#!/usr/bin/perl 
+use FindBin;
+use lib $FindBin::Bin;
+use utf8;
+##
+#########################################################
+use strict;
+use Bible;
+
+#globals, program info
+use vars qw($myname $ver $id_line);
+($myname = $0) =~ s!(.*)/!!;
+($ver = '$Revision: 1.1 $') =~ s!.*: (\d+\.\d+).*!$1!;
+$|=1;                                   #flush buffers immediately
+
+my ($wrap, $tab, $output, $greek, $macros, $poetry, $numbers, $color);
+my ($infile,$outfile);
+parse_args();
+Handle_Int();
+
+# for color output
+#use Term::ANSIColor;
+
+print STDERR "Formatting...\n" if $debug;
+if ($tab) {
+  *STDERR = *STDOUT;
+}
+my $in = *STDIN;
+if ($infile) {
+  open $in, "$infile"
+    or die "unable to open $infile: $!\n";
+}
+
+my $out = *STDOUT;
+if ($outfile) {
+  open $out, ">$outfile"
+    or die "unable to open $outfile: $!\n";
+}
+
+print_intro();
+
+my $exit_now =0;
+my $oldbook    = '';
+my $oldchapter = '';
+my $oldverse   = 0;
+my $firstline  = 1;
+my $linelength = 0;
+my $startchapter = 0;
+my $startverse = 0;
+my $endchapter = 0;
+my $endverse = 0;
+my $book = '';
+my $chapter = 0;
+my $verse = 0;
+my $text = '';
+my $word = '';
+my $strnumber  = '';
+my $pronounce = '';
+my $description = '';
+while(!$exit_now && ($_=<$in>)) {
+  my $no_line_break = 0;
+  chop;
+  if (/^\\nv\{(.*),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\}/) {
+    $oldbook    = '';
+    $book    = $1;
+    $startchapter = $2;
+    $startverse = $3;
+    $endchapter = $4;
+    $endverse = $5;
+    if (!$firstline && !$wrap) {
+      print $out "\n"
+    } 
+    if ($firstline) {
+      print_ref();
+      if (!$numbers) { print $out "\""; }
+    }
+  } elsif (/^\\pv\{(.*),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\}/) {
+    $oldbook    = '';
+    $book    = $1;
+    $startchapter = $2;
+    $startverse = $3;
+    $endchapter = $4;
+    $endverse = $5;
+    if (!$numbers) { print $out "\""; }
+    print $out "\n";
+    print_ref();
+    print $out "\n";
+    $firstline = 1;
+  } elsif (/^\\bv\{(.+)\}\{(\d+)\}\{(\d+)\}\{(.+)\}/) {
+    $book    = $1;
+    $chapter = $2;
+    $verse   = $3;
+    $text    = $4;
+    if (!$numbers && $firstline) { print $out "\""; }
+    if ($wrap && !$firstline) { print $out " "; }
+    if ($book !~ /$oldbook/) {
+      $oldbook = $book;
+      $oldchapter = $chapter;
+      print_book();
+    } elsif ($chapter !~ /$oldchapter/) {
+      $oldchapter = $chapter;
+      print_chapter();
+    } else { 
+      if (($oldverse+1) != $verse) {
+        print_chapter();
+      }  else { $no_line_break = 1; print_verse(); }
+    }
+    $oldverse = $verse;
+    $firstline = 0;
+  } elsif (/^\\strongsword\{(.\d+)\}\{(.+)\}\{(.+)\}\{(.+)\}/) {
+    $strnumber = $1;
+    $word   = $2;
+    $pronounce = $3;
+    $description = $4;
+    print_strongsword();
+  } else {
+    print $out "$_\n";
+  }
+}
+
+print_close();
+
+### Subroutines
+sub print_intro{
+  if ($output =~ /txt/) {
+  } elsif ($output =~ /tex/) {  
+    if ($macros) {
+      print_tex_macros_open();
+    }
+  }
+} #end print_intro
+
+sub print_ref {
+  my $location = "";
+  if ($startchapter) {$location .= " $startchapter";}
+  if ($startverse) {$location .= ":$startverse";}
+  if ($endchapter != $startchapter) {
+    $location .= "-$endchapter";
+    if ($endverse) {$location .= ":$endverse"; }
+  } elsif ($endverse && ($endverse != $startverse)) {$location .= "-$endverse";}
+  if ($output =~ /txt/) {
+    print $out "$book$location\n";
+  } elsif ($output =~ /tex/) {  
+    print $out  "\\item\[$book $location\]";
+  }
+}
+
+sub print_book{
+  if ($output =~ /txt/) {
+    print_verse();
+  } elsif ($output =~ /tex/) {  
+#      else {print $out  "\\item\[$book\]";}
+    print_chapter();
+  }
+} #end print_book
+
+sub print_chapter{
+  if ($output =~ /txt/) {
+    print_verse();
+  } elsif ($output =~ /tex/) {  
+    if ($greek) {
+      translate_greek();
+    } 
+    my $command = "newchapter";
+    if ($poetry) {$command .= "p";}
+    if (!$numbers) {$command .= "n";}
+    print  $out "\n\\$command\{$chapter}{$verse}{$text}";
+  }
+} #end print_chapter
+
+sub print_verse{
+  if ($text =~ /\\highlight\{[^\}]*\}/) {
+    print_highlight();
+  }
+  if ($text =~ /\\strongs\{[^\}]*\}\{(.\d+)\}/) {
+    print_strongs();
+  }
+  if ($output =~ /txt/) {
+    if ($numbers) {
+      if ($tab) {
+        printf  $out "%3d:%-3d\t",$chapter,$verse;
+      } else {
+        printf  $out "%3d:%-3d  ",$chapter,$verse;
+      }
+    } else {
+      if (!$linelength && !$wrap) { 
+        if ($tab) {
+          print  $out "\n\t"; 
+        } else {
+          print  $out "\n    "; 
+        }
+      }
+    }
+    print_text();
+  } elsif ($output =~ /tex/) {  
+    if ($greek) {
+      translate_greek();
+    } 
+    my $command = "newverse";
+    if ($poetry) {$command .= "p";}
+    if ($numbers) {$command .= "n";}
+    print  $out "\n\\$command\{$verse}{$text}";
+  }
+} #end print_verse
+
+sub print_close{
+  if ($output =~ /txt/) {
+    print  $out "\n";
+  } elsif ($output =~ /tex/) {  
+    if ($macros) {
+      print_tex_macros_close();
+    } else {
+      print  $out "\n";
+    }
+  }
+} #end print_close
+
+sub print_highlight{
+  if ($output =~ /txt/) {
+    while( $text =~ /\\highlight\{([^\}]*)\}/) {
+      $word = $1;
+#      if (!$color) {
+      $word =~ tr/a-z/A-Z/;
+      $text =~ s/\\highlight\{([^\}]*)\}/$word/;
+#      } else {
+#        my $string = sprintf RED, ON_WHITE, "$word", RESET;
+#        $text =~ s/\\highlight\{([^\}]*)\}/$string/;
+#      }
+    }
+  } elsif ($output =~ /tex/) {  
+  }
+} #end print_highlight
+
+sub print_strongs{
+  if ($output =~ /txt/) {
+    while( $text =~ /\\strongs\{([^\}]*)\}\{(.\d+)\}/) {
+      $word = $1;
+      $strnumber = $2;
+      $text =~ s/\\strongs\{[^\}]*\}\{.\d+\}/$word ($strnumber)/;
+    }
+  } elsif ($output =~ /tex/) {  
+  }
+} #end print_strongs
+
+sub print_text{
+  if ($wrap) {
+    print  $out "$text";
+  } else {
+## desired number of characters on each line 
+    my $maxcount = 60;
+## margin allowed around the desired
+    my $margin = 12;
+
+    $text =~ s/\s*$//;
+    while (length($text)+$linelength > $maxcount+$margin/2) {
+      my @tmp_text = split(//,$text);
+      my $exit_loop=0;
+      my $loop = 0;
+      my $breakpoint =0;
+      my $tmpmaxcount = $maxcount-$linelength;
+      my $highlight_started = 0;
+      while (!$exit_loop) {
+        if ($tmpmaxcount+$margin/2 > length($text)) {
+          $exit_loop=1;
+          $breakpoint = $tmpmaxcount+$margin/2;
+        }
+        if ($loop >$tmpmaxcount+$margin/2) {
+          $exit_loop=1;
+        }
+        if (($loop > $tmpmaxcount-$margin/2)
+          && ($tmp_text[$loop] =~ /[ -]/)) {
+          $breakpoint = $loop+1;
+          $exit_loop = 1;
+        }
+        if (!$highlight_started && $tmp_text[$loop] =~ /\33/) {
+          $tmpmaxcount += 28;
+          $loop+=28;
+          $highlight_started = 1;
+        } elsif ($tmp_text[$loop] =~ /\33/) {
+          $tmpmaxcount += 17;
+          $loop+=17;
+          $highlight_started = 0;
+        }
+        $loop++;
+
+      }
+      if (!$breakpoint) {$breakpoint = $tmpmaxcount;}
+      for($loop=0;$loop<$breakpoint;$loop++) {
+        print  $out "$tmp_text[$loop]";
+      }
+      $text = substr($text,$breakpoint);
+      $linelength = 0;
+
+      if (length($text) > 0) {
+        if (!$numbers) {
+          if ($tab) {
+            print  $out "\n\t";
+          } else {
+            print  $out "\n    ";
+          }
+        } else {
+          if ($tab) {
+            print  $out "\n\t\t";
+          } else {
+            print  $out "\n         ";
+          }
+        }
+      } else {
+        print  $out "\n";
+      }
+    } 
+    if (length($text) > 0) {
+      if ($numbers) {
+        print  $out "$text\n";
+        $linelength = 0;
+      } else { 
+        print  $out "$text ";
+        $linelength = length($text)+$linelength;
+        if ($linelength > $maxcount-$margin/2) {
+          $linelength = 0;
+        }
+      }
+    } 
+  } # not wrap
+} #end print_text
+
+sub print_strongsword{
+  if ($output =~ /txt/) {
+    print  $out "Strongs number: $strnumber\n";
+    print  $out "Word          : $word\n";
+    print  $out "Pronounciation: $pronounce\n";
+    $text = $description;
+    print  $out "Cite          : ";
+    my $str; 
+    while ($text =~ /\\cite\{(.\d+)\}/) {
+      if ($str) {$str .= ", $1";}
+      else {$str = $1;}
+      $text =~ s/\\cite\{.\d+\}//;
+    }
+    print  $out "$str\n";
+    print  $out "Description   :\n    ";
+    print_text();
+  } else {
+    print  $out "\\strongsword\{$strnumber\}\{$word\}\{$pronounce\}\{$description\}\n";
+  }
+} #end print_strongsword
+
+sub print_tex_macros_open{
+  print  << "STOP";
+  \\documentclass{article}
+  \\usepackage{fancybox}
+  \\usepackage{ifthen}
+  \\usepackage{Vmargin}
+  \\setpapersize{USletter}
+  \\setmargnohfrb{1in}{1in}{1in}{1in}
+  \\setlength{\\rightskip}{0pt plus 2cm}
+
+  \\newcommand{\\entrylabel}[1]{\\mbox{\\textsf{#1:}}\\hfil}
+  \\newenvironment{entry}
+  {\\begin{list}{}%
+       {\\renewcommand{\\makelabel}{\\entrylabel}%
+         \\setlength{\\labelwidth}{35pt}%
+         \\setlength{\\labelsep}{10pt}%
+         \\setlength{\\leftmargin}{45pt}%
+       }%
+  }%
+  {\\end{list}%
+}
+\\newlength{\\Mylen}
+\\newcommand{\\Biblelabel}[1]{
+     \\settowidth{\\Mylen}{\\textsf{#1 }}
+     \\ifthenelse{\\lengthtest{\\Mylen >\\labelwidth}}
+       {\\parbox[b]{\\labelwidth}%
+         {\\makebox[0pt][l]{\\textsf{#1}}\\\\}}%
+       {\\textsf{#1}}%
+    \\hfil\\relax}
+  \\newenvironment{Verse}%
+  {\\renewcommand{\\entrylabel}{\\Biblelabel}%
+   \\begin{entry}}%
+  {\\end{entry}}
+
+  \\newcommand{\\highlight}[1]{
+            \\Ovalbox{#1}}
+          \\newcommand{\\strongs}[2]{
+            {#1\\ensuremath{_{#2}}}}
+          \\newcommand{\\strongsword}[4]{
+            \\noindent
+            {\\sc Number     }: #1\\\\
+            {\\sc Word       }: #2\\\\
+            {\\sc Pronounce  }: #3\\\\
+            {\\sc Description}: #4\\\\\\linebreak}
+          \\renewcommand{\\cite}[1]{
+            See #1\ }
+          \\newcommand{\\newchapterpn}[3]{\\center{#3}}
+          \\newcommand{\\newchapterp}[3]{%
+             \\center{%
+%             \\ensuremath{\\ ^{#1:#2}}#3\\\\}}
+             \\ensuremath{\\ ^{#1:#2}}#3}}
+         \\newcommand{\\newchaptern}[3]{#3}
+         \\newcommand{\\newchapter}[3]{%
+%             \\ensuremath{\\ ^{#1:#2}}#3\\\\}
+             \\ensuremath{\\ ^{#1:#2}}#3}
+           \\newcommand{\\newversepn}[2]{\\center{#2}}
+           \\newcommand{\\newversep}[2]{%
+             \\center{%
+%             \\ensuremath{\\ ^{#1}}#2\\\\}}
+             \\ensuremath{\\ ^{#1}}#2}}
+         \\newcommand{\\newversen}[2]{#2}
+         \\newcommand{\\newverse}[2]{%
+%             \\ensuremath{\\ ^{#1}}#2\\\\}
+             \\ensuremath{\\ ^{#1}}#2}
+           \\begin{document}
+           \\pagestyle{empty}
+           \\begin{Verse}
+STOP
+} #end print_tex_macros_open
+
+sub print_tex_macros_close{
+  print  $out "\n\\end{Verse}\n";
+  print  $out "\n\\end{document}\n";
+} #end print_tex_macros_close
+
+
+sub translate_greek{
+  my %english2lowergreek= (
+    'A','{\\alpha}',
+    'B','{\\beta}',
+    'G','{\\gamma}',
+    'D','{\\delta}',
+    'E','{\\epsilon}',
+    'Z','{\\zeta}',
+    'H','{\\eta}',
+    'Q','{\\theta}',
+    'I','{\\iota}',
+    'K','{\\kappa}',
+    'L','{\\lambda}',
+    'M','{\\mu}',
+    'N','{\\nu}',
+    'C','{\\xi}',
+    'O','{o}',
+    'P','{\\pi}',
+    'R','{\\rho}',
+    'S','{\\sigma}',
+    'T','{\\tau}',
+    'U','{\\upsilon}',
+    'X','{\\chi}',
+    'F','{\\phi}',
+    'W','{\\omega}',
+    ' ','$ $',
+  );
+
+
+  my @letters = reverse split(//,$text);
+  my $newline = '$';
+  while ($#letters != 0) {
+    my $current = pop @letters;
+    my $next = pop @letters; 
+    my $character = '';
+    if ($next =~ /\)/) {
+      $newline .= $english2lowergreek{"$next"};
+      $newline .= $english2lowergreek{"$current"};
+    } elsif ($next =~ /\//) {
+      $character = $english2lowergreek{"$current"};
+      $newline .= "\\acute{$character}";
+    } elsif ($next =~ /\\/) {
+      $character = $english2lowergreek{"$current"};
+      $newline .= "\\grave{$character}";
+    } elsif ($next =~ /=/) {
+      $character = $english2lowergreek{"$current"};
+      $newline .= "\\hat{$character}";
+    } else {
+      $newline .= $english2lowergreek{"$current"};
+      push(@letters,$next);
+    }
+  } 
+  $newline .= '$';
+  $text = $newline;
+}
+#end translate greek
+
+##################################
+
+sub usage {
+  die <<EOF
+Usage for $myname (version $ver):
+     $myname < <input_file>
+
+Specific Optional Flags:
+     --output <txt,tex> (default: txt)
+     --tab <0,1> (true/false)
+     --wrap <0,1> (true/false)
+     --greek (expect greek input (required for tex mode only))
+     --poetry (output pretty tex for psalms)
+     --nonumbers (no numbers for chapter and verses (default: on))
+
+General Optional Flags:
+     --debug
+     --help
+EOF
+} #end usage
+
+##################################
+
+sub parse_args {
+  use Getopt::Long;
+
+  my ($showhelp,$tmp, $nonumbers);
+  #set defaults
+  $output  ||="txt";
+  $greek   ||= 0;
+  $macros  ||= 1;
+  $poetry  ||= 0;
+  $numbers ||= 1;
+  $debug   ||= 0;
+  $tab     ||= 0;
+  $wrap    ||= 0;
+  $color   ||= 1;
+  my $backdoor = 0;
+
+  GetOptions("output=s"        => \$output,
+  "greek"           => \$greek,
+"infile=s"        => \$infile,
+               "outfile=s"       => \$outfile,
+             "poetry"          => \$poetry,
+#               "tab!"            => \$tab,
+           "wrap"           => \$wrap,
+         "nonumbers"       => \$nonumbers,
+       "debug"           => \$debug,
+     "help"            => \$showhelp )
+ || ($showhelp = 1);
+
+ if ($nonumbers) {$numbers = 0;}
+ if (! -d $swap_dir) {$showhelp =1;}
+ #required arguments
+ if ($showhelp) { &usage(); }
+}
+
+
+
